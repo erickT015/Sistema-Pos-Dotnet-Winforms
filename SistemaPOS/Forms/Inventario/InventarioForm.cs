@@ -1,19 +1,23 @@
-﻿using SistemaPOS.Data;
+﻿using ClosedXML.Excel;
+using SistemaPOS.Data;
 using SistemaPOS.Helpers;
 using SistemaPOS.Models;
 using SistemaPOS.Models.DTOs.Inventario;
+using SistemaPOS.Services;
 using System;
 using System.ComponentModel;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using ClosedXML.Excel;
-using System.IO;
+using System.Globalization;
 
 namespace SistemaPOS.Forms
 {
     public class InventarioForm : Form
     {
+        private InventarioService _service;
+
         private DataGridView dgv; // 🔥 Aquí se pinta la tabla (grid principal)
         private TextBox txtScan;  // 🔥 Input para escaneo rápido
         private Button btnGuardar, btnModo, btnExportar, btnImportar, btnEditar;
@@ -43,6 +47,7 @@ namespace SistemaPOS.Forms
 
         public InventarioForm()
         {
+            _service = new InventarioService(db);
             InicializarUI();        // 🔥 Construye toda la pantalla (header, grid, botones)
             ConfigurarGrid();       // 🔥 Define columnas del dgv
             CargarCache();          // 🔥 Trae datos de BD → cacheProductos
@@ -65,11 +70,11 @@ namespace SistemaPOS.Forms
 
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3 };
 
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70)); //TAMAÑO FIJO DE 70
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // PORCENTAJE DEL 100%
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 55)); //TAMAÑO FIJO DE 55
 
-           
+
             // ================= HEADER =================
             var panelTop = new FlowLayoutPanel
             {
@@ -258,11 +263,12 @@ namespace SistemaPOS.Forms
                 }
             };
 
-
+            // EVENTO PARA DETECTAR SI EL USUARIO PRESIONA ESC PARA QUITAR FILA
             dgv.KeyDown += Dgv_KeyDown;
 
-            // ================= BOTONES =================
 
+
+            // ================= BOTONES FOOTER =================
 
             //BOTON PARA GUARDAR CAMBIOS EN MODO INVENTARIO 
             btnGuardar = new Button
@@ -276,70 +282,42 @@ namespace SistemaPOS.Forms
             };
             btnGuardar.Click += (s, e) => Guardar();
 
+            //TEXTO DE PAGINACION, DEFINIMOS PROPIEDADES
+            lblPagina = new Label
+            {
+                Text = "Página 1",
+                AutoSize = true,
+                Anchor = AnchorStyles.Top
+            };
 
-            // PANEL INFERIOR PARA PAGINACIÓN Y GUARDAR
+            // PANEL PADRE INFERIOR FOOTER ( - ,PAGINACIÓN, BOTÓN GUARDAR)
             var panelBottom = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 3
+                ColumnCount = 3,
+                Padding = new Padding(0, 12, 0, 0) //GENERA UN PADDING DE TODOS LOS ELEMENOTS, EN ESTA CASO 10 DESDE ARRIBA
             };
 
             panelBottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
             panelBottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
             panelBottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
 
-            var panelPaginacion = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.LeftToRight,
-                Anchor = AnchorStyles.None,
-                AutoSize = true
-            };
-
-            lblPagina = new Label { AutoSize = true };
-
-            /*
-            btnAnterior = new Button { Text = "◀", Width = 50 };
-            btnSiguiente = new Button { Text = "▶", Width = 50 };
-            lblPagina = new Label { AutoSize = true };
-
-            btnAnterior.Click += (s, e) =>
-            {
-                if (paginaActual > 1)
-                {
-                    paginaActual--;
-                    CargarVista();
-                }
-            };
-
-            btnSiguiente.Click += (s, e) =>
-            {
-                if (paginaActual < totalPaginas)
-                {
-                    paginaActual++;
-                    CargarVista();
-                }
-            };
-            
-
-            panelPaginacion.Controls.Add(btnAnterior);
-            panelPaginacion.Controls.Add(lblPagina);
-            panelPaginacion.Controls.Add(btnSiguiente);
-            */
-            panelPaginacion.Controls.Add(lblPagina);
-
+            // SUBPANEL DE BOTÓN GUARDAR (ALINEADO A LA DERECHA)
             var panelDerecha = new FlowLayoutPanel
             {
                 FlowDirection = FlowDirection.RightToLeft,
-                Dock = DockStyle.Fill
+                Dock = DockStyle.Fill //   QUE SE PEGUE ARRIBA
             };
 
+            // DEFINIMOS QUE CONTIENE CADA PANEL
             panelDerecha.Controls.Add(btnGuardar);
 
+            //METEMOS CADA PANEL EN EL PANEL PADRE INFERIOR
             panelBottom.Controls.Add(new Panel(), 0, 0);
-            panelBottom.Controls.Add(panelPaginacion, 1, 0);
+            panelBottom.Controls.Add(lblPagina, 1, 0);
             panelBottom.Controls.Add(panelDerecha, 2, 0);
 
-            // 🔥 IMPORTANTE (TE FALTABA)
+            //METEMOS TODO EN EL TABLELAYOUT PRINCIPAL
             layout.Controls.Add(panelTop, 0, 0);
             layout.Controls.Add(dgv, 0, 1);
             layout.Controls.Add(panelBottom, 0, 2);
@@ -347,7 +325,9 @@ namespace SistemaPOS.Forms
             this.Controls.Add(layout);
         }
 
+
         // ================= LOGICA =================
+        // FUNCION PARA ACTIVAR O DESACTIVAR MODO DE ESCANEO
         private void ActivarModo(bool activo)
         {
             modoEdicion = activo;
@@ -388,42 +368,26 @@ namespace SistemaPOS.Forms
                 return;
             }
 
-            var producto = db.Productos.FirstOrDefault(p => p.Codigo == codigo);
+            var producto = _service.ObtenerPorCodigo(codigo);
 
             InventarioItemDTO nuevoItem;
 
             if (producto != null)
             {
-                nuevoItem = new InventarioItemDTO
-                {
-                    Id = producto.Id,
-                    Codigo = producto.Codigo,
-                    Nombre = producto.Nombre,
-                    PrecioCompra = producto.PrecioCompra,
-                    PrecioVenta = producto.PrecioVenta,
-                    StockActual = producto.Cantidad,
-                    CategoriaId = producto.CategoriaId,
-                    ProveedorId = producto.ProveedorId,
-                    TipoVentaId = producto.TipoVentaId,
-                    Ajuste = 0,
-                    EsNuevo = false
-                };
+                nuevoItem = _service.CrearDesdeProducto(producto);
             }
             else
             {
-                if (!esAdmin) { MessageBox.Show("No existe."); return; }
-
-                nuevoItem = new InventarioItemDTO
+                if (!esAdmin)
                 {
-                    Codigo = codigo,
-                    Nombre = "NUEVO PRODUCTO",
-                    Ajuste = 0,
-                    StockActual = 0,
-                    EsNuevo = true,
-                    TipoVentaId = 1,
-                    CategoriaId = db.Categorias.Select(c => c.Id).FirstOrDefault(),
-                    ProveedorId = db.Proveedores.Select(p => p.Id).FirstOrDefault()
-                };
+                    MessageBox.Show("No existe.");
+                    return;
+                }
+
+                var categoriaDefault = db.Categorias.Select(c => c.Id).FirstOrDefault();
+                var proveedorDefault = db.Proveedores.Select(p => p.Id).FirstOrDefault();
+
+                nuevoItem = _service.CrearNuevoProducto(codigo, categoriaDefault, proveedorDefault);
             }
 
             vistaActual.Add(nuevoItem);
@@ -448,64 +412,30 @@ namespace SistemaPOS.Forms
                 // Usamos Distinct para no procesar la misma fila varias veces
                 var indicesParaProcesar = filasEditadas.Distinct().ToList();
 
-                foreach (var rowIndex in indicesParaProcesar)
+                var itemsParaGuardar = indicesParaProcesar
+                    .Where(i => i >= 0 && i < vistaActual.Count)
+                    .Select(i => vistaActual[i])
+                    .ToList();
+
+                // 🔥 validar antes de guardar
+                foreach (var item in itemsParaGuardar)
                 {
-                    if (rowIndex < 0 || rowIndex >= vistaActual.Count) continue;
-
-                    var item = vistaActual[rowIndex];
-
-                    // VALIDACIÓN CRÍTICA: Si falla, el Helper muestra el mensaje y salimos
                     if (!ValidationHelper.EsValido(item)) return;
-
-                    var producto = db.Productos.FirstOrDefault(p => p.Codigo == item.Codigo);
-
-                    if (producto != null)
-                    {
-                        // ACTUALIZAR EXISTENTE
-                        producto.Nombre = item.Nombre.Trim().ToUpper();
-                        producto.PrecioCompra = item.PrecioCompra;
-                        producto.PrecioVenta = item.PrecioVenta;
-                        producto.Cantidad = item.Total; // Total = StockActual + Ajuste
-                        producto.CategoriaId = item.CategoriaId;
-                        producto.ProveedorId = item.ProveedorId;
-                        producto.TipoVentaId = item.TipoVentaId;
-                        producto.Activo = item.Activo;
-                    }
-                    else if (item.EsNuevo)
-                    {
-                        // INSERTAR NUEVO
-                        var nuevoProd = new Producto
-                        {
-                            Codigo = item.Codigo,
-                            Nombre = item.Nombre.Trim().ToUpper(),
-                            PrecioCompra = item.PrecioCompra,
-                            PrecioVenta = item.PrecioVenta,
-                            Cantidad = item.Total,
-                            CategoriaId = item.CategoriaId,
-                            ProveedorId = item.ProveedorId,
-                            TipoVentaId = item.TipoVentaId,
-                            Activo = true
-                        };
-                        db.Productos.Add(nuevoProd);
-                    }
                 }
 
-                db.SaveChanges();
-                MessageBox.Show("¡Datos guardados con éxito!", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                // 🔥 guardar usando service
+                _service.GuardarItems(itemsParaGuardar);
 
-                // --- EL RESET DE FÁBRICA ---
-                LimpiarGridTotalmente();
+               // db.SaveChanges();
+                MessageBox.Show("¡Datos guardados con éxito!");
 
-                // Limpieza de estados
-                undoStack.Clear();
+                RefrescarTodo();
 
-                // Recargar para sincronizar IDs de nuevos productos y limpiar colores
-                CargarCache();
-                CargarVista();
-                filasEditadas.Clear();
-                dgv.Refresh();
-
-                ActivarModo(!modoEdicion);
+                //  SI ESTÁS EN MODO INVENTARIO, SALIR CORRECTAMENTE
+                if (modoEdicion)
+                {
+                    ActivarModo(false);
+                }
             }
             catch (Exception ex)
             {
@@ -590,15 +520,16 @@ namespace SistemaPOS.Forms
             });
 
             // 5. Precios
-            dgv.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PrecioCompra", HeaderText = "P. Compra", Width = 90 });
-            dgv.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PrecioVenta", HeaderText = "P. Venta", Width = 80 });
+            dgv.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PrecioCompra", HeaderText = "P. Compra", Width = 90, DefaultCellStyle = new DataGridViewCellStyle { Format = "N2" } });
+            dgv.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PrecioVenta", HeaderText = "P. Venta", Width = 80, DefaultCellStyle = new DataGridViewCellStyle { Format = "N2" } });
 
             // 6. Inventario (Lectura y Ajuste)
             dgv.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "StockActual", HeaderText = "Stock", Width = 60, ReadOnly = true, DefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(240, 240, 240) } });
             dgv.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Ajuste", HeaderText = "Ajuste", Width = 60 });
             dgv.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Total", HeaderText = "Total", Width = 60, ReadOnly = true });
 
-            dgv.ColumnHeaderMouseClick += (s, e) => {
+            dgv.ColumnHeaderMouseClick += (s, e) =>
+            {
                 string nombreColumna = dgv.Columns[e.ColumnIndex].DataPropertyName;
 
                 // Si clickea la misma columna, invierte el orden. Si es otra, pone Ascendente.
@@ -618,20 +549,33 @@ namespace SistemaPOS.Forms
         {
             if (string.IsNullOrEmpty(columnaOrdenada) || vistaActual.Count == 0) return;
 
-            if (ordenAscendente)
-                vistaActual = vistaActual.OrderBy(x => GetPropertyValue(x, columnaOrdenada)).ToList();
-            else
-                vistaActual = vistaActual.OrderByDescending(x => GetPropertyValue(x, columnaOrdenada)).ToList();
+            Func<InventarioItemDTO, object> keySelector = columnaOrdenada switch
+            {
+                nameof(InventarioItemDTO.Codigo) => x => x.Codigo,
+                nameof(InventarioItemDTO.Nombre) => x => x.Nombre,
+                nameof(InventarioItemDTO.PrecioCompra) => x => x.PrecioCompra,
+                nameof(InventarioItemDTO.PrecioVenta) => x => x.PrecioVenta,
+                nameof(InventarioItemDTO.StockActual) => x => x.StockActual,
+                nameof(InventarioItemDTO.Ajuste) => x => x.Ajuste,
+                nameof(InventarioItemDTO.Total) => x => x.Total,
+                nameof(InventarioItemDTO.CategoriaId) => x => x.CategoriaId,
+                nameof(InventarioItemDTO.ProveedorId) => x => x.ProveedorId,
+                nameof(InventarioItemDTO.TipoVentaId) => x => x.TipoVentaId,
+                _ => x => x.Nombre
+            };
+
+            vistaActual = ordenAscendente
+                ? vistaActual.OrderBy(keySelector).ToList()
+                : vistaActual.OrderByDescending(keySelector).ToList();
 
             dgv.Refresh();
         }
 
         // Función auxiliar para leer la propiedad por nombre (Reflection)
-        private object GetPropertyValue(object obj, string propertyName)
+      /*  private object GetPropertyValue(object obj, string propertyName)
         {
             return obj.GetType().GetProperty(propertyName)?.GetValue(obj, null);
-        }
-
+        }*/
 
         private void ConfigurarVirtualMode()
         {
@@ -655,13 +599,10 @@ namespace SistemaPOS.Forms
                 if (res == DialogResult.Yes)
                 {
                     Guardar();
-                    // --- EL RESET DE FÁBRICA ---
-                    LimpiarGridTotalmente();
-                    // --- EL RESET DE FÁBRICA ---
-                    // LimpiarGridTotalmente();
-                    // Si después de intentar guardar siguen habiendo filas editadas (porque falló validación)
-                    // No cerramos el modo edición.
+
                     if (filasEditadas.Count > 0) return;
+
+                    RefrescarTodo();
                 }
                 else if (res == DialogResult.No)
                 {
@@ -705,19 +646,9 @@ namespace SistemaPOS.Forms
                 btnEditar.UseVisualStyleBackColor = true;
             }
 
-            // btnEditar.Text = modoEdicionManual ? "Finalizar" : "Editar";
-
-            // Feedback visual opcional
-            //   btnEditar.BackColor = modoEdicionManual ? Color.FromArgb(40, 167, 69) : Color.FromArgb(18, 18, 18);
-
-
-
-
             if (filasEditadas.Count == 0)
             {
                 string mensaje = modoEdicionManual ? "Modo edición activado." : "Modo edición desactivado.";
-                // Puedes usar un label de estado en lugar de un MessageBox para no interrumpir
-                // lblStatus.Text = mensaje; 
             }
         }
 
@@ -789,7 +720,8 @@ namespace SistemaPOS.Forms
 
                             // --- FUNCIÓN DE LIMPIEZA PARA NÚMEROS ---
                             // Esto quita espacios de miles y símbolos de moneda aunque Excel jure que es "número"
-                            Func<int, decimal> LeerDecimal = (col) => {
+                            Func<int, decimal> LeerDecimal = (col) =>
+                            {
                                 string raw = f.Cell(col).GetValue<string>()
                                     .Replace(" ", "")       // Quita espacios normales
                                     .Replace("\u00A0", "")  // Quita espacios de formato Excel (non-breaking space)
@@ -844,24 +776,7 @@ namespace SistemaPOS.Forms
 
         private void CargarCache()
         {
-            cacheProductos = db.Productos
-                .Select(p => new InventarioItemDTO
-                {
-                    Id = p.Id,
-                    Codigo = p.Codigo,
-                    Nombre = p.Nombre,
-                    PrecioCompra = p.PrecioCompra,
-                    PrecioVenta = p.PrecioVenta,
-                    StockActual = p.Cantidad,
-                    CantidadMinima = p.CantidadMinima,
-                    CategoriaId = p.CategoriaId,
-                    ProveedorId = p.ProveedorId,
-                    TipoVentaId = p.TipoVentaId,
-                    Activo = p.Activo,
-                    Ajuste = 0,
-                    EsNuevo = false
-                })
-                .ToList();
+            cacheProductos = _service.QueryInventario().ToList();
         }
 
         private void Dgv_CellValueNeeded(object sender, DataGridViewCellValueEventArgs e)
@@ -906,14 +821,38 @@ namespace SistemaPOS.Forms
                         break;
 
                     case "PrecioCompra":
-                        oldValue = item.PrecioCompra;
-                        item.PrecioCompra = Convert.ToDecimal(e.Value);
-                        break;
+                        {
+                            oldValue = item.PrecioCompra;
+
+                            if (NumberHelper.TryParseDecimal(e.Value, out decimal resultado))
+                            {
+                                item.PrecioCompra = resultado;
+                            }
+                            else
+                            {
+                                MessageBox.Show("Número inválido (ej: 1500,50)");
+                                return;
+                            }
+
+                            break;
+                        }
 
                     case "PrecioVenta":
-                        oldValue = item.PrecioVenta;
-                        item.PrecioVenta = Convert.ToDecimal(e.Value);
-                        break;
+                        {
+                            oldValue = item.PrecioVenta;
+
+                            if (NumberHelper.TryParseDecimal(e.Value, out decimal resultado))
+                            {
+                                item.PrecioVenta = resultado;
+                            }
+                            else
+                            {
+                                MessageBox.Show("Número inválido (ej: 1500,50)");
+                                return;
+                            }
+
+                            break;
+                        }
 
                     case "Ajuste":
                         oldValue = item.Ajuste;
@@ -924,6 +863,16 @@ namespace SistemaPOS.Forms
                         oldValue = item.CategoriaId;
                         item.CategoriaId = Convert.ToInt32(e.Value);
                         break;
+
+                    case "Stock":
+                        oldValue = item.StockActual;
+                        item.StockActual = Convert.ToInt32(e.Value);
+                        break;
+
+                   /* case "Total":
+                        oldValue = item.Total;
+                        item.Total = Convert.ToInt32(e.Value);
+                        break;*/
 
                     case "ProveedorId":
                         oldValue = item.ProveedorId;
@@ -941,13 +890,19 @@ namespace SistemaPOS.Forms
                         break;
                 }
 
-                // 🔥 GUARDAR EN UNDO
+                //  GUARDAR EN UNDO
                 undoStack.Push((e.RowIndex, col, oldValue));
 
-                // 🔥 MARCAR FILA COMO EDITADA
+                //  MARCAR FILA COMO EDITADA
                 filasEditadas.Add(e.RowIndex);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error al editar celda: {ex.Message}",
+                                "Error",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning);
+            }
 
             dgv.InvalidateRow(e.RowIndex);
         }
@@ -1022,53 +977,35 @@ namespace SistemaPOS.Forms
             }
         }
 
-        // FUNCION PARA PINTAR FILAS SI ES PRODUCTO NUEVO O ACTUALIZAR
-        private void PintarFilas()
+        private void LimpiarGridTotalmente(bool limpiarCache = false)
         {
-            foreach (DataGridViewRow row in dgv.Rows)
-            {
-                // En Virtual Mode, no usamos row.DataBoundItem directamente de forma fiable
-                // Es mejor acceder a tu lista 'vistaActual' por índice
-                if (row.Index < 0 || row.Index >= vistaActual.Count) continue;
-
-                var item = vistaActual[row.Index];
-
-                if (item.EsNuevo)
-                {
-                    row.DefaultCellStyle.BackColor = Color.LightGreen;
-                    row.DefaultCellStyle.SelectionBackColor = Color.Green; // Color cuando está seleccionada
-                }
-                else if (filasEditadas.Contains(row.Index))
-                {
-                    // Si la fila ha sido editada (está en el set de filasEditadas)
-                    row.DefaultCellStyle.BackColor = Color.LightYellow;
-                    row.DefaultCellStyle.SelectionBackColor = Color.Goldenrod;
-                }
-                else
-                {
-                    row.DefaultCellStyle.BackColor = Color.White;
-                    row.DefaultCellStyle.ForeColor = Color.Black;
-                }
-            }
-        }
-
-        private void LimpiarGridTotalmente()
-        {
-            // 1. Limpiamos las fuentes de datos
             vistaActual.Clear();
-            cacheProductos.Clear(); // Si quieres que refresque desde DB la próxima vez
 
-            // 2. Limpiamos los rastreadores de cambios
+            if (limpiarCache)
+                cacheProductos.Clear();
+
             filasEditadas.Clear();
             undoStack.Clear();
 
-            // 3. Reset visual del Grid
             dgv.RowCount = 0;
             dgv.Invalidate();
             dgv.Refresh();
+        }
 
-            // 4. Limpiar buscador
-            txtBuscar.Clear();
+        private void RefrescarTodo(bool limpiarBusqueda = false)
+        {
+            LimpiarGridTotalmente(true);
+
+            CargarCache();
+            CargarVista();
+
+            filasEditadas.Clear();
+            undoStack.Clear();
+
+            if (limpiarBusqueda)
+                txtBuscar.Clear();
+
+            dgv.Refresh();
         }
     }
 }
